@@ -1,12 +1,12 @@
 require 'rubygems'
-require 'bundler'
-Bundler.setup(:default, :test)
-Bundler.require(:default, :test)
 
 dir = File.dirname(File.expand_path(__FILE__))
 $LOAD_PATH.unshift dir + '/../lib'
 $TESTING = true
 require 'test/unit'
+
+require 'redis/namespace'
+require 'resque'
 
 begin
   require 'leftright'
@@ -147,12 +147,14 @@ end
 class Time
   # Thanks, Timecop
   class << self
+    attr_accessor :fake_time
+
     alias_method :now_without_mock_time, :now
 
-    def now_with_mock_time
-      $fake_time || now_without_mock_time
+    def now
+      fake_time || now_without_mock_time
     end
-
-    alias_method :now, :now_with_mock_time
   end
+
+  self.fake_time = nil
 end
