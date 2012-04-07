@@ -12,6 +12,7 @@ require 'resque/stat'
 require 'resque/job'
 require 'resque/worker'
 require 'resque/plugin'
+require 'resque/queue'
 
 module Resque
   include Helpers
@@ -43,6 +44,9 @@ module Resque
     else
       @redis = Redis::Namespace.new(:resque, :redis => server)
     end
+    @queues = Hash.new { |h,name|
+      h[name] = Resque::Queue.new(name, @redis, self)
+    }
   end
 
   # Returns the current Redis connection. If none has been created, will
@@ -136,21 +140,24 @@ module Resque
   #
   # Returns nothing
   def push(queue, item)
-    watch_queue(queue)
-    redis.rpush "queue:#{queue}", encode(item)
+    @queues[queue] << item
   end
 
   # Pops a job off a queue. Queue name should be a string.
   #
   # Returns a Ruby object.
   def pop(queue)
-    decode redis.lpop("queue:#{queue}")
+    begin
+      @queues[queue].pop(true)
+    rescue ThreadError
+      nil
+    end
   end
 
   # Returns an integer representing the size of a queue.
   # Queue name should be a string.
   def size(queue)
-    redis.llen("queue:#{queue}").to_i
+    @queues[queue].size
   end
 
   # Returns an array of items currently queued. Queue name should be
@@ -162,7 +169,7 @@ module Resque
   # To get the 3rd page of a 30 item, paginatied list one would use:
   #   Resque.peek('my_list', 59, 30)
   def peek(queue, start = 0, count = 1)
-    list_range("queue:#{queue}", start, count)
+    @queues[queue].slice start, count
   end
 
   # Does the dirty work of fetching a range of items from a Redis list
@@ -185,13 +192,7 @@ module Resque
   # Given a queue name, completely deletes the queue.
   def remove_queue(queue)
     redis.srem(:queues, queue.to_s)
-    redis.del("queue:#{queue}")
-  end
-
-  # Used internally to keep track of which queues we've created.
-  # Don't call this directly.
-  def watch_queue(queue)
-    redis.sadd(:queues, queue.to_s)
+    @queues[queue].destroy
   end
 
 
