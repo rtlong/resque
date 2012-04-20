@@ -5,6 +5,10 @@ require 'mutex_m'
 
 module Resque
   ###
+  # Exception raised when trying to access a queue that's already destroyed
+  class QueueDestroyed < RuntimeError; end
+
+  ###
   # A queue interface that quacks like Queue from Ruby's stdlib.
   class Queue
     include Mutex_m
@@ -20,11 +24,15 @@ module Resque
       @redis_name = "queue:#{@name}"
       @redis      = redis
       @coder      = coder
+      @destroyed  = false
+
+      @redis.sadd(:queues, @name)
     end
 
     # Add +object+ to the queue
+    # If trying to push to an already destroyed queue, it will raise a Resque::QueueDestroyed exception
     def push object
-      @redis.sadd(:queues, @name)
+      raise QueueDestroyed if destroyed?
 
       synchronize do
         @redis.rpush @redis_name, encode(object)
@@ -83,11 +91,21 @@ module Resque
 
     # Deletes this Queue from redis. This method is *not* available on the
     # stdlib Queue.
+    #
+    # If there are multiple queue objects of the same name, Queue A and Queue
+    # B and you delete Queue A, pushing to Queue B will have unknown side
+    # effects. Queue A will be marked destroyed, but Queue B will not.
     def destroy
       @redis.del @redis_name
+      @redis.srem(:queues, @name)
+      @destroyed = true
     end
 
-    private
+    # returns +true+ if the queue is destroyed and +false+ if it isn't
+    def destroyed?
+      @destroyed
+    end
+
     def encode object
       @coder.dump object
     end

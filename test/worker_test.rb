@@ -4,6 +4,7 @@ describe "Resque::Worker" do
   include Test::Unit::Assertions
 
   before do
+    Resque.redis = Resque.redis # reset state in Resque object
     Resque.redis.flushall
 
     Resque.before_first_fork = nil
@@ -154,6 +155,24 @@ describe "Resque::Worker" do
     Resque::Job.create(:blahblah, GoodJob)
 
     worker = Resque::Worker.new("*")
+    processed_queues = []
+
+    worker.work(0) do |job|
+      processed_queues << job.queue
+    end
+
+    assert_equal %w( jobs high critical blahblah ).sort, processed_queues
+  end
+
+  it "can work with dynamically added queues when using wildcard" do
+    worker = Resque::Worker.new("*")
+
+    assert_equal ["jobs"], Resque.queues
+
+    Resque::Job.create(:high, GoodJob)
+    Resque::Job.create(:critical, GoodJob)
+    Resque::Job.create(:blahblah, GoodJob)
+
     processed_queues = []
 
     worker.work(0) do |job|
@@ -330,7 +349,6 @@ describe "Resque::Worker" do
   end
 
   it "Will call a before_first_fork hook only once" do
-    Resque.redis.flushall
     $BEFORE_FORK_CALLED = 0
     Resque.before_first_fork = Proc.new { $BEFORE_FORK_CALLED += 1 }
     workerA = Resque::Worker.new(:jobs)
@@ -347,7 +365,6 @@ describe "Resque::Worker" do
   end
 
   it "Will call a before_fork hook before forking" do
-    Resque.redis.flushall
     $BEFORE_FORK_CALLED = false
     Resque.before_fork = Proc.new { $BEFORE_FORK_CALLED = true }
     workerA = Resque::Worker.new(:jobs)
@@ -378,7 +395,6 @@ describe "Resque::Worker" do
   end
 
   it "Will call an after_fork hook after forking" do
-    Resque.redis.flushall
     $AFTER_FORK_CALLED = false
     Resque.after_fork = Proc.new { $AFTER_FORK_CALLED = true }
     workerA = Resque::Worker.new(:jobs)

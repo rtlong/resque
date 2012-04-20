@@ -13,6 +13,9 @@ require 'resque/job'
 require 'resque/worker'
 require 'resque/plugin'
 require 'resque/queue'
+require 'resque/multi_queue'
+require 'resque/coder'
+require 'resque/multi_json_coder'
 
 module Resque
   include Helpers
@@ -45,9 +48,16 @@ module Resque
       @redis = Redis::Namespace.new(:resque, :redis => server)
     end
     @queues = Hash.new { |h,name|
-      h[name] = Resque::Queue.new(name, @redis, self)
+      h[name] = Resque::Queue.new(name, @redis, coder)
     }
   end
+
+  # Encapsulation of encode/decode. Overwrite this to use it across Resque.
+  # This defaults to MultiJson for backwards compatibilty.
+  def coder
+    @coder ||= MultiJsonCoder.new
+  end
+  attr_writer :coder
 
   # Returns the current Redis connection. If none has been created, will
   # create a new one.
@@ -140,7 +150,7 @@ module Resque
   #
   # Returns nothing
   def push(queue, item)
-    @queues[queue] << item
+    queue(queue) << item
   end
 
   # Pops a job off a queue. Queue name should be a string.
@@ -148,7 +158,7 @@ module Resque
   # Returns a Ruby object.
   def pop(queue)
     begin
-      @queues[queue].pop(true)
+      queue(queue).pop(true)
     rescue ThreadError
       nil
     end
@@ -157,7 +167,7 @@ module Resque
   # Returns an integer representing the size of a queue.
   # Queue name should be a string.
   def size(queue)
-    @queues[queue].size
+    queue(queue).size
   end
 
   # Returns an array of items currently queued. Queue name should be
@@ -169,7 +179,7 @@ module Resque
   # To get the 3rd page of a 30 item, paginatied list one would use:
   #   Resque.peek('my_list', 59, 30)
   def peek(queue, start = 0, count = 1)
-    @queues[queue].slice start, count
+    queue(queue).slice start, count
   end
 
   # Does the dirty work of fetching a range of items from a Redis list
@@ -191,8 +201,13 @@ module Resque
 
   # Given a queue name, completely deletes the queue.
   def remove_queue(queue)
-    redis.srem(:queues, queue.to_s)
-    @queues[queue].destroy
+    queue(queue).destroy
+    @queues.delete(queue.to_s)
+  end
+
+  # Return the Resque::Queue object for a given name
+  def queue(name)
+    @queues[name.to_s]
   end
 
 
