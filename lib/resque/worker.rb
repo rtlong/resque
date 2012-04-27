@@ -128,7 +128,9 @@ module Resque
       loop do
         break if shutdown?
 
-        if not paused? and job = reserve
+        pause if should_pause?
+
+        if job = reserve(interval)
           log "got: #{job.inspect}"
           job.worker = self
           run_hook :before_fork, job
@@ -148,9 +150,8 @@ module Resque
           @child = nil
         else
           break if interval.zero?
-          log! "Sleeping for #{interval} seconds"
+          log! "Timed out after #{interval} seconds"
           procline paused? ? "Paused" : "Waiting for #{@queues.join(',')}"
-          sleep interval
         end
       end
 
@@ -192,16 +193,24 @@ module Resque
 
     # Attempts to grab a job off one of the provided queues. Returns
     # nil if no job can be found.
-    def reserve
+    def reserve(interval = 5.0)
+      interval = interval.to_i
       multi_queue = MultiQueue.new(
         queues.map {|queue| Queue.new(queue, Resque.redis, Resque.coder) },
         Resque.redis)
 
-      queue, job = multi_queue.pop(true)
+      queue, job = if interval < 1
+        begin
+          multi_queue.pop(true)
+        rescue ThreadError
+          nil
+        end
+      else
+        queue, job = multi_queue.poll(interval.to_i)
+      end
+
       log! "Found job on #{queue}"
-      return Job.new(queue.name, job)
-    rescue ThreadError
-      nil
+      Job.new(queue.name, job) if queue && job
     end
 
     # Returns a list of queues to use when searching for a job.
@@ -268,7 +277,6 @@ module Resque
         trap('QUIT') { shutdown   }
         trap('USR1') { kill_child }
         trap('USR2') { pause_processing }
-        trap('CONT') { unpause_processing }
       rescue ArgumentError
         warn "Signals QUIT, USR1, USR2, and/or CONT not supported."
       end
@@ -309,8 +317,21 @@ module Resque
     end
 
     # are we paused?
-    def paused?
+    def should_pause?
       @paused
+    end
+    alias :paused? :should_pause?
+
+    def pause
+      rd, wr = IO.pipe
+      trap('CONT') {
+        log "CONT received; resuming job processing"
+        @paused = false
+        wr.write 'x'
+        wr.close
+      }
+      rd.read 1
+      rd.close
     end
 
     # Stop processing jobs after the current one has completed (if we're
@@ -318,12 +339,6 @@ module Resque
     def pause_processing
       log "USR2 received; pausing job processing"
       @paused = true
-    end
-
-    # Start processing jobs again after a pause
-    def unpause_processing
-      log "CONT received; resuming job processing"
-      @paused = false
     end
 
     # Looks for any workers which should be running on this server

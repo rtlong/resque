@@ -11,7 +11,7 @@ module Resque
 
     ###
     # Create a new MultiQueue using the +queues+ from the +redis+ connection
-    def initialize(queues, redis)
+    def initialize(queues, redis = Resque.redis)
       super()
 
       @queues     = queues # since ruby 1.8 doesn't have Ordered Hashes
@@ -52,6 +52,21 @@ module Resque
           queue = @queue_hash[queue_name]
           [queue, queue.decode(payload)]
         end
+      end
+    end
+
+    # Retrieves data from the queue head, and removes it.
+    #
+    # Blocks for +timeout+ seconds if the queue is empty, and returns nil if
+    # the timeout expires.
+    def poll(timeout)
+      queue_names = @queues.map {|queue| queue.redis_name }
+      queue_name, payload = @redis.blpop(*(queue_names + [timeout]))
+      return unless payload
+
+      synchronize do
+        queue = @queue_hash[queue_name]
+        [queue, queue.decode(payload)]
       end
     end
   end
